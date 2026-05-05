@@ -5,6 +5,7 @@ import sys
 import time
 import traceback
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import tkinter as tk
 from tkinter import simpledialog
@@ -74,6 +75,34 @@ def ensure_config() -> Path:
     if not config_path.exists():
         config_path.write_text(DEFAULT_CONFIG.lstrip(), encoding="utf-8")
     return config_path
+
+
+def setup_logging() -> Path:
+    config_path = ensure_config()
+    log_path = config_path.parent / f"{APP_NAME}.log"
+
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    )
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=1_000_000,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    return log_path
 
 
 def load_config() -> dict:
@@ -178,13 +207,67 @@ def prompt_description(root: tk.Tk, button_label: str, timeout_seconds: int) -> 
     return (description_input or "").strip()
 
 
+def describe_time_entry(entry: TimeEntry | None) -> str:
+    if entry is None:
+        return "no running timer"
+
+    description = entry.description or "(no description)"
+    details = [f"id={entry.id}", f"workspace={entry.workspace_id}", f"description={description!r}"]
+    if entry.project_id is not None:
+        details.append(f"project={entry.project_id}")
+    if entry.task_id is not None:
+        details.append(f"task={entry.task_id}")
+    if entry.tags:
+        details.append(f"tags={entry.tags}")
+    return ", ".join(details)
+
+
+def log_external_timer_change(
+    previous_entry: TimeEntry | None,
+    current_entry: TimeEntry | None,
+    *,
+    sync_reason: str,
+) -> None:
+    previous_id = previous_entry.id if previous_entry is not None else None
+    current_id = current_entry.id if current_entry is not None else None
+    if previous_id == current_id:
+        return
+
+    if previous_entry is not None and current_entry is None:
+        logger.warning(
+            "Timer stopped outside physical buttons, likely via Toggl Web/UI/app/API (%s): %s",
+            sync_reason,
+            describe_time_entry(previous_entry),
+        )
+        return
+
+    if previous_entry is None and current_entry is not None:
+        logger.info(
+            "Timer started outside physical buttons, likely via Toggl Web/UI/app/API (%s): %s",
+            sync_reason,
+            describe_time_entry(current_entry),
+        )
+        return
+
+    if previous_entry is not None and current_entry is not None:
+        logger.warning(
+            "Timer changed outside physical buttons, likely via Toggl Web/UI/app/API (%s): stopped [%s]; now running [%s]",
+            sync_reason,
+            describe_time_entry(previous_entry),
+            describe_time_entry(current_entry),
+        )
+
+
 def sync_buttons_to_toggl(
     toggl: TogglClient,
     buttons_manager: Buttons,
     buttons: list[dict],
+    cached_entry: TimeEntry | None = None,
+    sync_reason: str = "periodic sync",
     observed_state: int | None = None,
 ) -> tuple[TimeEntry | None, int]:
     current_entry = toggl.get_current_time_entry()
+    log_external_timer_change(cached_entry, current_entry, sync_reason=sync_reason)
     desired_state = resolve_button_state(current_entry, buttons)
     if observed_state is None:
         observed_state = buttons_manager.led_state
@@ -193,18 +276,29 @@ def sync_buttons_to_toggl(
     return current_entry, desired_state
 
 
-def stop_cached_time_entry(toggl: TogglClient, current_entry: TimeEntry | None) -> None:
+def stop_cached_time_entry(
+    toggl: TogglClient,
+    current_entry: TimeEntry | None,
+    *,
+    reason: str,
+) -> None:
     if current_entry is None:
+        logger.info("Stop requested (%s), but no cached timer was running.", reason)
         return
+    logger.info(
+        "Stopping timer via physical buttons (%s): %s",
+        reason,
+        describe_time_entry(current_entry),
+    )
     toggl.stop_time_entry(current_entry.workspace_id, current_entry.id)
 
 
 def main():
-    logging.basicConfig(level=logging.INFO)
-
+    log_path = setup_logging()
     config_path = ensure_config()
     config = load_config()
     settings = config.get(CONFIG_SECTION, {})
+    logger.info("Logging to %s", log_path)
 
     ports = normalize_ports(settings.get("ports"))
     buttons = normalize_buttons(settings.get("buttons"))
@@ -242,6 +336,8 @@ def main():
             toggl,
             buttons_manager,
             buttons,
+            cached_entry=current_entry,
+            sync_reason="initial sync",
             observed_state=buttons_manager.led_state,
         )
         last_sync_at = time.monotonic()
@@ -261,6 +357,8 @@ def main():
                     toggl,
                     buttons_manager,
                     buttons,
+                    cached_entry=current_entry,
+                    sync_reason="periodic sync",
                     observed_state=state,
                 )
                 last_sync_at = now
@@ -283,6 +381,8 @@ def main():
                     toggl,
                     buttons_manager,
                     buttons,
+                    cached_entry=current_entry,
+                    sync_reason="device reconnect sync",
                     observed_state=state,
                 )
                 last_sync_at = now
@@ -299,7 +399,11 @@ def main():
                 pressed_button = buttons[state - 1]
 
                 if pressed_button["mode"] == "null" and state == null_button_index:
-                    stop_cached_time_entry(toggl, current_entry)
+                    stop_cached_time_entry(
+                        toggl,
+                        current_entry,
+                        reason=f"null button '{pressed_button['name']}'",
+                    )
                     buttons_manager.set_active_led(-1)
                     current_entry = None
                     previous_state = -1
@@ -310,7 +414,11 @@ def main():
                         pressed_button["name"],
                         prompt_timeout_seconds,
                     )
-                    stop_cached_time_entry(toggl, current_entry)
+                    stop_cached_time_entry(
+                        toggl,
+                        current_entry,
+                        reason=f"timer button '{pressed_button['name']}' starting a replacement timer",
+                    )
 
                     button_workspace_id = pressed_button["workspace_id"] or workspace_id
                     current_entry = toggl.start_time_entry(
@@ -323,6 +431,11 @@ def main():
                     )
                     previous_state = state
                     title = description or pressed_button["name"]
+                    logger.info(
+                        "Started timer via physical button '%s': %s",
+                        pressed_button["name"],
+                        describe_time_entry(current_entry),
+                    )
                     print_statusline(f"Running: {title}")
 
                 last_sync_at = time.monotonic()
