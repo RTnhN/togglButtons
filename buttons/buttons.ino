@@ -1,3 +1,6 @@
+// Reply to the host's "id" command so it can find this board on any serial port.
+const char deviceId[] = "toggl-buttons v1";
+
 const int numButtons = 5;
 const int buttonPins[numButtons] = {9, 10, 11, 12, 13};
 const int ledPins[numButtons] = {4, 5, 6, 7, 8};
@@ -57,7 +60,10 @@ void loop() {
 }
 
 void handleSerialCommand(String command) {
-  if (command == "state") {
+  command.trim();
+  if (command == "id") {
+    Serial.println(deviceId);
+  } else if (command == "state") {
     int ledOn = -1;
     for (int i = 0; i < numButtons; i++) {
       if (ledStates[i] == HIGH) {
