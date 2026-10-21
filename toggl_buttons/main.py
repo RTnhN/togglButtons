@@ -178,7 +178,9 @@ def prompt_description(root: tk.Tk, button_label: str, timeout_seconds: int) -> 
         timeout_handle["id"] = None
         for child in root.winfo_children():
             if isinstance(child, tk.Toplevel) and child.wm_title() == APP_NAME:
-                entry_widget = child.children.get("entry")
+                # simpledialog puts the entry inside a body frame, not
+                # directly on the Toplevel.
+                entry_widget = getattr(child, "entry", None)
                 if entry_widget is None or not entry_widget.get().strip():
                     child.destroy()
                 break
@@ -195,6 +197,9 @@ def prompt_description(root: tk.Tk, button_label: str, timeout_seconds: int) -> 
         if timeout_id is not None:
             root.after_cancel(timeout_id)
         root.attributes("-topmost", False)
+        # Flush the dialog's destroy to the X server; otherwise it can stay on
+        # screen, frozen, until Tk next processes events.
+        root.update()
     return (description_input or "").strip()
 
 
@@ -338,6 +343,8 @@ def main():
 
     while True:
         try:
+            # Keep Tk responsive to the window manager between prompts.
+            root.update()
             state = buttons_manager.get_led_state()
             currently_connected = buttons_manager.is_connected()
             now = time.monotonic()
