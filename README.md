@@ -34,7 +34,7 @@ Config notes:
 
 - `toggl_api_token` is your Toggl Track API token.
 - `workspace_id` can be left as `0` to use your Toggl default workspace.
-- `ports` should contain one or more serial device paths, for example `["COM3"]`.
+- There is no serial port setting. The app scans every COM port on Windows and every `/dev/ttyACM*` and `/dev/ttyUSB*` port on Linux, and connects to whichever one answers the button panel handshake, so it keeps working when the port name changes.
 - `sync_interval_seconds` controls the scheduled Toggl reconciliation interval. Increase it if you want even fewer requests.
 - `sync_retry_backoff_seconds` controls how long the app waits after a Toggl API failure before trying another background sync.
 - Each `[[toggl_buttons.buttons]]` entry can be:
@@ -98,6 +98,21 @@ The included [buttons/buttons.ino](/mnt/c/Users/Zachs/Desktop/Projects/togglButt
 - `l0` clears all LEDs
 
 That command is what allows the 2-minute Toggl sync to correct the hardware state.
+
+It also answers an `id` command with `toggl-buttons v1`. The app uses this
+ping/pong to find the panel automatically, so the app won't connect until the
+board is running this sketch. With `arduino-cli` and an Uno (stop the watcher first so
+it isn't holding the port; `arduino-cli board list` shows the port):
+
+```sh
+arduino-cli compile --fqbn arduino:avr:uno buttons
+arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:uno buttons
+```
+
+Until the panel is found, the app keeps looping through
+the serial ports. A port that doesn't answer is probed again after a minute
+(or right away if it is replugged), so other serial devices aren't reset every
+few seconds.
 
 Repository notes
 ----------------

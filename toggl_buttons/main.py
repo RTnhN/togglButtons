@@ -24,7 +24,6 @@ DEFAULT_CONFIG = f"""
 poll_time = 0.2
 sync_interval_seconds = 120
 sync_retry_backoff_seconds = 600
-ports = []
 toggl_api_token = ""
 workspace_id = 0
 button_prompt_timeout_seconds = 30
@@ -116,14 +115,6 @@ def print_statusline(message: str):
     print(" " * last_length, end="\r")
     print(message, end="\r")
     print_statusline.last_msg = message
-
-
-def normalize_ports(ports_value):
-    if ports_value is None:
-        return []
-    if isinstance(ports_value, str):
-        return [ports_value] if ports_value else []
-    return [port for port in ports_value if port]
 
 
 def normalize_buttons(buttons_value):
@@ -300,7 +291,6 @@ def main():
     settings = config.get(CONFIG_SECTION, {})
     logger.info("Logging to %s", log_path)
 
-    ports = normalize_ports(settings.get("ports"))
     buttons = normalize_buttons(settings.get("buttons"))
     poll_time = float(settings.get("poll_time", 0.2))
     sync_interval_seconds = int(settings.get("sync_interval_seconds", 120))
@@ -311,15 +301,15 @@ def main():
     api_token = (settings.get("toggl_api_token") or "").strip()
     configured_workspace_id = int(settings.get("workspace_id") or 0)
 
-    if not ports or not buttons:
-        logger.error("Ports and buttons must be configured in %s", config_path)
+    if not buttons:
+        logger.error("Buttons must be configured in %s", config_path)
         sys.exit(1)
 
     null_button_index = find_null_button_index(buttons)
 
     toggl = TogglClient(api_token=api_token, user_agent=APP_NAME)
     workspace_id = configured_workspace_id or toggl.get_default_workspace_id()
-    buttons_manager = Buttons(ports)
+    buttons_manager = Buttons()
 
     root = tk.Tk()
     root.withdraw()
