@@ -89,6 +89,37 @@ Why not a service:
 - This app uses `tkinter` prompts for timer descriptions.
 - Windows services run in Session 0, so interactive prompts are the wrong fit there.
 
+Linux auto-start
+----------------
+
+On a Linux desktop using systemd, run:
+
+```sh
+./install_linux_autostart.sh
+```
+
+The installer creates a per-user service, starts it immediately, and enables it
+at login. The service runs from this checkout's `.venv`, waits for the network,
+and restarts automatically if the watcher fails. A user service is used so the
+Tk description prompt can appear in your desktop session.
+
+If the config does not exist yet, the first installer run creates
+`~/.config/toggl-buttons/config.toml` and asks you to set `toggl_api_token`.
+Edit that value and run the installer again.
+
+Useful commands:
+
+```sh
+systemctl --user status toggl-buttons
+journalctl --user -u toggl-buttons -f
+systemctl --user restart toggl-buttons
+./install_linux_autostart.sh --remove
+```
+
+Depending on your distribution, you may also need to install its Tk package
+(often `python3-tk`) and add your user to the group allowed to access serial
+devices (often `dialout`). Log out and back in after changing group membership.
+
 Arduino
 -------
 
